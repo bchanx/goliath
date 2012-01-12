@@ -1,0 +1,5 @@
+ECE496 Design Project @ University of Toronto
+Module for communication between Kinect and Arduino using processing (processing.org)
+Processes Kinect data signals and translates into appropriate signals for Arduino in order to move a robotic arm and mimic user movement.
+Demo of hacking the arm: http://vimeo.com/34715898
+
