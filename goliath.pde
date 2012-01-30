@@ -4,20 +4,21 @@
  * Contact: bchanx@gmail.com
  */
 
-import cc.arduino.*;
-import hypermedia.net.*;
-import processing.net.*;
-import processing.serial.*;
+  import hypermedia.net.*;
+  import processing.net.*;
+  import processing.serial.*;
 
-/*
- * Global variables.
- */
-  Arduino _arduino;
+  /*
+   * Global variables.
+   */
   Serial _port;
   UDP _udp;
   Timer _timer;
   boolean _run = false;
   boolean _reset = false;
+  boolean _arduino = false;
+  ArrayList<Character> _motors = new ArrayList<Character>();
+  HashMap<String, Float> _motor_movement = new HashMap<String, Float>();
   HashMap<String, Coord> _old_coords = new HashMap<String, Coord>();
   HashMap<String, Coord> _new_coords = new HashMap<String, Coord>();
 
@@ -50,165 +51,246 @@ import processing.serial.*;
   final int GO_CLOSE = 6;
   
   // Skeleton tracking positions
+  final String BASE = "BASE";
   final String SHOULDER = "SHOULDER";
   final String ELBOW = "ELBOW";
   final String WRIST = "WRIST";
   final String HAND = "HAND";
 
   // Motor-degree Conversion Rates
-  final float UP_CONV_RATE = 63.5;
-  final float DOWN_CONV_RATE = 57.0;
-
-
-//===== COORD TEST
-void coord_test () {
-  Coord old_vec = new Coord(0, 0, -3);
-  Coord new_vec = new Coord(-3, 0, -3);
+  final float CONV_RATE = 55.0;
+  final float UP_CONV_RATE = 60.0;
+  final float DOWN_CONV_RATE = 50.0;
   
-  println("old: "+old_vec.toStr());
-  println("new: "+new_vec.toStr());
-  
-  //float angle = old_vec.angleBetweenLines(new_vec);
-  //println(angle);
-  println("left? "+str(new_vec.isLeft(old_vec)));
-  
-  //angle = tmp_vec.angleBetweenVectors(new_vec);
-  //println(angle);
-  //println("above? "+str(new_vec.isAbove(tmp_vec)));
-}
+  // Angle treshold
+  final float ANGLE_THRESHOLD = 3.0;
 
-//===== SERIAL TEST
-void serial_test() {
-  _port = new Serial(this, Serial.list()[0], 9600);
-  int i = 2;
-  int cmd;
-  while (true) {
-      if (i%2 == 0) cmd = GO_UP;
-      else cmd = GO_DOWN; 
-      float angle = 15.0;
-      moveArm(angle, cmd, ELBOW_MOTOR);
-      i++;
-  }
-}
-
-//===== UDP TEST
-void udp_test() {
-  _udp = new UDP(this, 6000);
-  //_udp.log(true); // printout the connection activity
-  _udp.listen(true);
-}
-
-//===== ROTATION TEST
-void rotation_test() {
-  Coord old_vec = new Coord(0, 0, -1);
-  Coord new_vec = new Coord(-1,0, 0);
-  println(old_vec.toStr());
-  println(new_vec.toStr());
-
-  old_vec.rotateVector(45.0, new_vec);
-  println(old_vec.toStr());
-  //new_vec = new Coord(0, 0, -1);
-  //old_vec.rotateVector(90.0, old_vec.cross_product(new_vec));
-  //println(old_vec.toStr());
-}
-
+/*
+ * Setup function.
+ */
 void setup () {
-  _port = new Serial(this, Serial.list()[0], 9600);
-  //coord_test();
-  //serial_test();
-  udp_test();
-  //rotation_test();
-
+  if (Serial.list().length != 0) {
+    _arduino = true;
+    _port = new Serial(this, Serial.list()[0], 9600);
+  }
+  _udp = new UDP(this, 6000);
+  _udp.listen(true);
+  _motor_movement.put(BASE, 0.0);
+  _motor_movement.put(SHOULDER, 0.0);
+  _motor_movement.put(ELBOW, 0.0);
+  _motor_movement.put(WRIST, 0.0);
 }
 
+/*
+ * Continuous draw function.
+ */
 void draw () {
-  if (_run && _valid()) { // && _old_coords/_new_coords not empty
-    //println("IN THE RUN LOOP!");
-    // implement update loop here
-    // get the new coords
-    
-    // CHECK ELBOW (up/down)
-      // if up/down diff > 5 degrees:
-        // move shoulder motor 5 degrees
-        // old coord elbow up/down update +/- 5 degrees
-        // old coord wrist up/down update +/- 5 degrees
-    // CHECK WRIST (left/right and up/down) new angle_xz vs old angle_xz
-      // if left/right diff > 5 degrees:
-        // move base motor 5 degrees left/right
-        // update old coord vec 5 degrees left/right
-        // update old coord angle_xz 5 degrees left/right
-      // Using TMP transform vector... check if up/down diff > 5 degrees:
-        // move elbow motor 5 degrees up/down
-        // generate tmp vector thats above/below current old_coord
-        // find cross product of the two vectors
-        // old coord wrist update +/- 5 degrees
-    // CHECK HAND
-
+  if (_run && _valid()) {
+    // Get Current Data vectors
     Coord new_elbow = _new_coords.get(ELBOW);
     Coord old_elbow = _old_coords.get(ELBOW);
-    
     Coord new_wrist = _new_coords.get(WRIST);
     Coord old_wrist = _old_coords.get(WRIST);
     
+    // Transform vector to keep track of movement
     Coord transform = new Coord(old_wrist);
     
-    // check ELBOW position
-    //println("NEW_ELBOW: "+new_elbow.toStr());
-    //println("OLD_ELBOW: "+old_elbow.toStr());
+    // check ELBOW up/down position
     float angle = new_elbow.angleBetween(old_elbow);
-    //println("  --- ELBOW angleBtwn: "+angle);
+    int dir = (new_elbow.isAbove(old_elbow)) ? GO_UP : GO_DOWN;
     if(angle > ANGLE_THRESHOLD) {
-      int dir = (new_elbow.isAbove(old_elbow)) ? GO_UP : GO_DOWN;
-      //moveArm(ANGLE_THRESHOLD, dir, SHOULDER_MOTOR);
+      _addMotor(dir, SHOULDER_MOTOR);
       old_elbow.rotateVector(ANGLE_THRESHOLD, dir);
       old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
-      transform.rotateVector(angle, dir);
-      //println("  --- old_elbow: "+old_elbow.toStr());
-      //println("  --- old_wrist: "+old_wrist.toStr());
-      //println("  --- transform: "+transform.toStr());
     }
-    
-    // check WRIST position
-    println("NEW_WRIST: "+new_wrist.toStr());
-    println("OLD_WRIST: "+old_wrist.toStr());
-    {  // check left/right
-      angle = abs(new_wrist.angle_xz - old_wrist.angle_xz);
-      println("  --- WRIST angleBtwn: "+angle);
-      if (angle > ANGLE_THRESHOLD) {
-        int dir = (new_wrist.isLeft(old_wrist)) ? GO_LEFT : GO_RIGHT;
-        moveArm(ANGLE_THRESHOLD, dir, BASE_MOTOR);
-        old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
-        transform.rotateVector(angle, dir);
-        println("  --- old_wrist: "+old_wrist.toStr());
-        println("  --- transform: "+transform.toStr());
-      }
-      // check up/down
+    transform.rotateVector(angle, dir);
+
+    // check WRIST left/right
+    angle = abs(new_wrist.angle_xz - old_wrist.angle_xz);
+    dir = (new_wrist.isLeft(old_wrist)) ? GO_LEFT : GO_RIGHT;  
+    if (angle > ANGLE_THRESHOLD) {
+      _addMotor(dir, BASE_MOTOR);
+      old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
     }
+    transform.rotateVector(angle, dir);
+
+    // check WRIST up/down    
+    angle = new_wrist.angleBetween(transform);
+    dir = (new_wrist.isAbove(transform)) ? GO_UP : GO_DOWN;
+    if (angle > ANGLE_THRESHOLD) {
+      _addMotor(dir, ELBOW_MOTOR);
+      old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+    }
+
     // check HAND position
+    
+    // move motors
+    _write_to_arduino(ANGLE_THRESHOLD, CONV_RATE);
   }
   
   // do cleanup
   if (_reset) {
     _reset = false;
-    // move arm back to starting position here
-    // calculate how to rotate _old_coords back to (0, -1, 0)
+    _reset_motor(BASE, BASE_LEFT, BASE_RIGHT);
+    _reset_motor(SHOULDER, SHOULDER_UP, SHOULDER_DOWN);
+    _reset_motor(ELBOW, ELBOW_UP, ELBOW_DOWN);
+    _reset_motor(WRIST, WRIST_UP, WRIST_DOWN);
     _old_coords.clear();
     _new_coords.clear();
-
     println ("--- DONE RESET! ");
   }
 }
 
-// Angle treshold
-final float ANGLE_THRESHOLD = 5.0;
-  
+
+/*
+ * Helper function to check whether hashmaps are empty.
+ */
 boolean _valid () {
   if (_old_coords.isEmpty()) return false;
   if (_new_coords.isEmpty()) return false;
   return true;
 }
 
+/*
+ * Reset motor based on movement up until now.
+ */
+void _reset_motor(String motor, char pos, char neg) {
+  float angle = _motor_movement.get(motor);
+  if (abs(angle) > 0) {
+    if (angle > 0) _motors.add(neg);
+    else _motors.add(pos);
+    _write_to_arduino(angle, CONV_RATE);
+    _motor_movement.put(motor, 0.0);
+  }
+}
 
+/*
+ * Add choose which motor we are moving.
+ */
+void _addMotor(int dir, int motor) {
+  switch (motor) {
+    case BASE_MOTOR:
+      if (dir == GO_LEFT) _add_m(BASE_LEFT, BASE, ANGLE_THRESHOLD);
+      else if (dir == GO_RIGHT) _add_m(BASE_RIGHT, BASE, -ANGLE_THRESHOLD);
+      break;
+    case SHOULDER_MOTOR:
+      if (dir == GO_UP) _add_m(SHOULDER_UP, SHOULDER, ANGLE_THRESHOLD);
+      else if (dir == GO_DOWN) _add_m(SHOULDER_DOWN, SHOULDER, -ANGLE_THRESHOLD);
+      break;
+    case ELBOW_MOTOR:
+      if (dir == GO_UP) _add_m(ELBOW_UP, ELBOW, ANGLE_THRESHOLD);
+      else if (dir == GO_DOWN) _add_m(ELBOW_DOWN, ELBOW, -ANGLE_THRESHOLD);
+      break;
+    case WRIST_MOTOR:
+      if (dir == GO_UP) _add_m(WRIST_UP, WRIST, ANGLE_THRESHOLD);
+      else if (dir == GO_DOWN) _add_m(WRIST_DOWN, WRIST, -ANGLE_THRESHOLD);
+      break;
+    case HAND_MOTOR:
+      if (dir == GO_OPEN) _motors.add(HAND_OPEN);
+      else if (dir == GO_CLOSE) _motors.add(HAND_CLOSE);
+      break;
+  }
+}
+
+/*
+ * Add motor to _motor list and increment _motor_movement.
+ */
+void _add_m(char input, String motor, float angle) {
+  _motors.add(input);
+  float tmp = _motor_movement.get(motor);
+  tmp += angle;
+  _motor_movement.put(motor, tmp);  
+}
+
+/*
+ * Write character input to Arduino.
+ */
+void _write_to_arduino(float angle, float rate) {
+  if (_arduino && !_motors.isEmpty()) {
+    int i, counter = floor(angle*rate);
+    for (i=0; i<_motors.size()-1; i++) {
+      _port.write(_motors.get(i));
+    }
+    while (counter-- > 0) {
+      _port.write(_motors.get(i));
+    }
+    _port.write(STOP_ALL);
+    _motors.clear();
+  }
+}
+
+/*
+ * UDP handler
+ */
+void receive(byte[] data, String ip, int port ) {
+  String message = new String(data);
+  // println( "receive: \""+message+"\" from "+ip+" on port "+port );
+  _deserialize(message);
+  println("--- AFTER DESERiALIZE: ");
+  println(" old_coords: ");
+  hm_toString(_old_coords);
+  println(" new_coords: ");
+  hm_toString(_new_coords);
+}
+
+/*
+ * Helper function to print hash map.
+ */
+void hm_toString(HashMap<String, Coord> hm) {
+  Iterator i = hm.entrySet().iterator();
+  while (i.hasNext()) {
+    Map.Entry me = (Map.Entry)i.next();
+    print("   " + me.getKey() + " is ");
+    Coord tmp = (Coord) me.getValue();
+    println(tmp.toStr());
+  }
+}
+
+/*
+ * Deserialize message strings from Kinect.
+ */
+void _deserialize (String message) {
+  String[] data = split(message, '=');
+  if (data[0].equals("START")) {
+    String[] tokens = split(data[1], ';');
+    _parse_coords(_old_coords, tokens);
+    _run = true;
+  } else if (data[0].equals("DATA")) {
+    String[] tokens = split(data[1], ';');
+    _parse_coords(_new_coords, tokens);
+  } else if (data[0].equals("END")) {
+    _run = false;
+    _reset = true;
+  } else {
+    println("--- FAIL. SHOULDN'T GET HERE. ---");
+  }
+}
+
+/*
+ * Parse skeleton coords from Kinect
+ * (TODO) add check to see if key is valid tracking point
+ * (TODO) add check to see if 3 values provided for coords
+ */
+void _parse_coords (HashMap<String, Coord> _hm, String[] tokens) {
+  for (int i=0; i<tokens.length; i++) {
+    String[] metadata = split(tokens[i], ':');
+    String key = metadata[0];
+    float[] values = float(split(metadata[1], ','));
+    
+    // z values are always negative
+    if (values[2] > 0) values[2] = 0;
+    // create coord
+    Coord tmp = new Coord(values[0], values[1], values[2]);
+    // if Elbow, set rotate vector such that x==0 to track yz movement
+    if (key.equals(ELBOW)) {
+      float theta = 90 - tmp.angle_xz;
+      int dir = (theta > 0) ? GO_RIGHT : GO_LEFT;
+      tmp.rotateVector(theta, dir);
+    }
+    // put into hashmap
+    _hm.put(key, tmp);
+  }
+}
 
 /*
  * Coord class for storing (x, y, z) coords
@@ -303,6 +385,7 @@ class Coord {
    */
   void rotateVector(float theta, Coord new_vec) {
     PVector cross_p = this.vec.cross(new_vec.vec);
+    cross_p.normalize();
     _rotate(theta, this.vec, cross_p);
   }
   
@@ -383,115 +466,6 @@ class Timer  {
     int passedTime = millis() - savedTime;
     if (passedTime > totalTime) return true;
     return false;
-  }
-}
-
-/*
- * Select input key and motor conversion rate.
- */
-void moveArm(float angle, int dir, int motor) {
-  switch (motor) {
-    case BASE_MOTOR:
-      if (dir == GO_LEFT) _write_to_arduino(angle, UP_CONV_RATE, BASE_LEFT);
-      else if (dir == GO_RIGHT) _write_to_arduino(angle, DOWN_CONV_RATE, BASE_RIGHT);
-      break;
-    case SHOULDER_MOTOR:
-      if (dir == GO_UP) _write_to_arduino(angle, UP_CONV_RATE, SHOULDER_UP);
-      else if (dir == GO_DOWN) _write_to_arduino(angle, DOWN_CONV_RATE, SHOULDER_DOWN);
-      break;
-    case ELBOW_MOTOR:
-      if (dir == GO_UP) _write_to_arduino(angle, UP_CONV_RATE, ELBOW_UP);
-      else if (dir == GO_DOWN) _write_to_arduino(angle, DOWN_CONV_RATE, ELBOW_DOWN);
-      break;
-    case WRIST_MOTOR:
-      if (dir == GO_UP) _write_to_arduino(angle, UP_CONV_RATE, WRIST_UP);
-      else if (dir == GO_DOWN) _write_to_arduino(angle, DOWN_CONV_RATE, WRIST_DOWN);
-      break;
-    case HAND_MOTOR:
-      if (dir == GO_OPEN) _write_to_arduino(angle, UP_CONV_RATE, HAND_OPEN);
-      else if (dir == GO_CLOSE) _write_to_arduino(angle, DOWN_CONV_RATE, HAND_CLOSE);
-      break;
-  }
-}
-
-/*
- * Write character input to Arduino.
- */
-void _write_to_arduino(float angle, float rate, char input) {
-  int counter = floor(angle*rate);
-  while (counter-- > 0) {
-    _port.write(input);
-  }
-  _port.write(STOP_ALL);
-}
-
-/*
- * UDP handler
- */
-void receive(byte[] data, String ip, int port ) {
-  String message = new String(data);
-  // println( "receive: \""+message+"\" from "+ip+" on port "+port );
-  deserialize(message);
-  println("--- AFTER DESERiALIZE: ");
-  println(" old_coords: ");
-  hm_toString(_old_coords);
-  println(" new_coords: ");
-  hm_toString(_new_coords);
-}
-
-void hm_toString(HashMap<String, Coord> hm) {
-  Iterator i = hm.entrySet().iterator();
-  while (i.hasNext()) {
-    Map.Entry me = (Map.Entry)i.next();
-    print("   " + me.getKey() + " is ");
-    Coord tmp = (Coord) me.getValue();
-    println(tmp.toStr());
-  }
-}
-
-/*
- * Deserialize message strings from Kinect.
- */
-void deserialize (String message) {
-  String[] data = split(message, '=');
-  if (data[0].equals("START")) {
-    String[] tokens = split(data[1], ';');
-    _parse_coords(_old_coords, tokens);
-    _run = true;
-  } else if (data[0].equals("DATA")) {
-    String[] tokens = split(data[1], ';');
-    _parse_coords(_new_coords, tokens);
-  } else if (data[0].equals("END")) {
-    _run = false;
-    _reset = true;
-  } else {
-    println("--- FAIL. SHOULDN'T GET HERE. ---");
-  }
-}
-
-/*
- * Parse skeleton coords from Kinect
- * (TODO) add check to see if key is valid tracking point
- * (TODO) add check to see if 3 values provided for coords
- */
-void _parse_coords (HashMap<String, Coord> _hm, String[] tokens) {
-  for (int i=0; i<tokens.length; i++) {
-    String[] metadata = split(tokens[i], ':');
-    String key = metadata[0];
-    float[] values = float(split(metadata[1], ','));
-    
-    // z values are always negative
-    if (values[2] > 0) values[2] = 0;
-    // create coord
-    Coord tmp = new Coord(values[0], values[1], values[2]);
-    // if Elbow, set rotate vector such that x==0 to track yz movement
-    if (key.equals(ELBOW)) {
-      float theta = 90 - tmp.angle_xz;
-      int dir = (theta > 0) ? GO_RIGHT : GO_LEFT;
-      tmp.rotateVector(theta, dir);
-    }
-    // put into hashmap
-    _hm.put(key, tmp);
   }
 }
 
