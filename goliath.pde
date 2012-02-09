@@ -58,12 +58,12 @@
   final String HAND = "HAND";
 
   // Motor-degree Conversion Rates
-  final float CONV_RATE = 55.0;
+  final float CONV_RATE = 60.0;
   final float UP_CONV_RATE = 60.0;
   final float DOWN_CONV_RATE = 50.0;
   
   // Angle treshold
-  final float ANGLE_THRESHOLD = 3.0;
+  final float ANGLE_THRESHOLD = 5.0;
 
 /*
  * Setup function.
@@ -99,7 +99,7 @@ void draw () {
     float angle = new_elbow.angleBetween(old_elbow);
     int dir = (new_elbow.isAbove(old_elbow)) ? GO_UP : GO_DOWN;
     if(angle > ANGLE_THRESHOLD) {
-      _addMotor(dir, SHOULDER_MOTOR);
+      //_addMotor(dir, SHOULDER_MOTOR);
       old_elbow.rotateVector(ANGLE_THRESHOLD, dir);
       old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
     }
@@ -283,9 +283,11 @@ void _parse_coords (HashMap<String, Coord> _hm, String[] tokens) {
     Coord tmp = new Coord(values[0], values[1], values[2]);
     // if Elbow, set rotate vector such that x==0 to track yz movement
     if (key.equals(ELBOW)) {
-      float theta = 90 - tmp.angle_xz;
-      int dir = (theta > 0) ? GO_RIGHT : GO_LEFT;
-      tmp.rotateVector(theta, dir);
+      float theta = abs(90 - tmp.angle_xz);
+      if (theta != 0) {
+        int dir = (tmp.angle_xz < 90) ? GO_RIGHT : GO_LEFT;
+        tmp.rotateVector(theta, dir);
+      }
     }
     // put into hashmap
     _hm.put(key, tmp);
@@ -319,20 +321,18 @@ class Coord {
    * Used to set the angle_xz field upon Coord initilization.
    */
   void _angleXZ() {
-    if (this.vec.x == 0 && this.vec.z == 0) {
+    if (this.vec.x == 0) {
       this.angle_xz = 90.0;
       return;
     }
     float new_z = sqrt(1 - sq(this.vec.y));
-    if (this.vec.z < 0) new_z *= -1;
+    if (new_z > 0) { new_z *= -1; }
     PVector tmp = new PVector(0, this.vec.y, new_z);
     tmp.normalize();
-    
-    float theta = (tmp.z*this.vec.x - this.vec.z*tmp.x)/ ((sq(this.vec.z) + sq(this.vec.x)));
-    if (abs(theta) > 1) theta += abs(theta)%1; // sometimes goes beyond -1 due to precision rounding
-    float angle_xz = asin(theta);
-    if (Float.isNaN(angle_xz)) this.angle_xz = 0;
-    else this.angle_xz = 90-degrees(angle_xz);
+    float theta = abs((tmp.z*this.vec.x - this.vec.z*tmp.x))/ ((sq(this.vec.z) + sq(this.vec.x)));
+    if (theta > 1) { theta -= theta%1; }// sometimes goes beyond 1 due to precision rounding
+    float angle_xz = degrees(asin(theta));
+    this.angle_xz = (this.vec.x > 0) ? 90+angle_xz : 90-angle_xz;
   }
   
   /*
@@ -416,6 +416,7 @@ class Coord {
     old_vec.x = new_x;
     old_vec.y = new_y;
     old_vec.z = new_z;
+    old_vec.normalize();
   }
   
   /*
