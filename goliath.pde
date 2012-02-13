@@ -56,6 +56,13 @@
   final String ELBOW = "ELBOW";
   final String WRIST = "WRIST";
   final String HAND = "HAND";
+  
+  final float BASE_LOW_BOUND = -90.0;
+  final float BASE_UP_BOUND = 90.0;
+  final float SHOULDER_LOW_BOUND = 0.0;
+  final float SHOULDER_UP_BOUND = 90.0;
+  final float ELBOW_LOW_BOUND = 0.0;
+  final float ELBOW_UP_BOUND = 135.0;
 
   // Motor-degree Conversion Rates
   final float CONV_RATE = 60.0;
@@ -99,9 +106,10 @@ void draw () {
     float angle = new_elbow.angleBetween(old_elbow);
     int dir = (new_elbow.isAbove(old_elbow)) ? GO_UP : GO_DOWN;
     if(angle > ANGLE_THRESHOLD) {
-      //_addMotor(dir, SHOULDER_MOTOR);
-      old_elbow.rotateVector(ANGLE_THRESHOLD, dir);
-      old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+      if (_addMotor(SHOULDER_MOTOR, dir)) {
+        old_elbow.rotateVector(ANGLE_THRESHOLD, dir);
+        old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+      }
     }
     transform.rotateVector(angle, dir);
 
@@ -109,8 +117,9 @@ void draw () {
     angle = abs(new_wrist.angle_xz - old_wrist.angle_xz);
     dir = (new_wrist.isLeft(old_wrist)) ? GO_LEFT : GO_RIGHT;  
     if (angle > ANGLE_THRESHOLD) {
-      _addMotor(dir, BASE_MOTOR);
-      old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+      if (_addMotor(BASE_MOTOR, dir)) {
+        old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+      }
     }
     transform.rotateVector(angle, dir);
 
@@ -118,8 +127,9 @@ void draw () {
     angle = new_wrist.angleBetween(transform);
     dir = (new_wrist.isAbove(transform)) ? GO_UP : GO_DOWN;
     if (angle > ANGLE_THRESHOLD) {
-      _addMotor(dir, ELBOW_MOTOR);
-      old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+      if (_addMotor(ELBOW_MOTOR, dir)) {
+        old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+      }
     }
 
     // check HAND position
@@ -131,7 +141,7 @@ void draw () {
   // do cleanup
   if (_reset) {
     _reset = false;
-    _reset_motor(BASE, BASE_LEFT, BASE_RIGHT);
+    _reset_motor(BASE, BASE_RIGHT, BASE_LEFT);  
     _reset_motor(SHOULDER, SHOULDER_UP, SHOULDER_DOWN);
     _reset_motor(ELBOW, ELBOW_UP, ELBOW_DOWN);
     _reset_motor(WRIST, WRIST_UP, WRIST_DOWN);
@@ -159,7 +169,7 @@ void _reset_motor(String motor, char pos, char neg) {
   if (abs(angle) > 0) {
     if (angle > 0) _motors.add(neg);
     else _motors.add(pos);
-    _write_to_arduino(angle, CONV_RATE);
+    _write_to_arduino(abs(angle), CONV_RATE);
     _motor_movement.put(motor, 0.0);
   }
 }
@@ -167,39 +177,44 @@ void _reset_motor(String motor, char pos, char neg) {
 /*
  * Add choose which motor we are moving.
  */
-void _addMotor(int dir, int motor) {
+boolean _addMotor(int motor, int dir) {
   switch (motor) {
     case BASE_MOTOR:
-      if (dir == GO_LEFT) _add_m(BASE_LEFT, BASE, ANGLE_THRESHOLD);
-      else if (dir == GO_RIGHT) _add_m(BASE_RIGHT, BASE, -ANGLE_THRESHOLD);
+      if (dir == GO_LEFT) return _add_m(BASE_LEFT, BASE, -ANGLE_THRESHOLD, BASE_LOW_BOUND, BASE_UP_BOUND);
+      else if (dir == GO_RIGHT) return _add_m(BASE_RIGHT, BASE, ANGLE_THRESHOLD, BASE_LOW_BOUND, BASE_UP_BOUND);
       break;
     case SHOULDER_MOTOR:
-      if (dir == GO_UP) _add_m(SHOULDER_UP, SHOULDER, ANGLE_THRESHOLD);
-      else if (dir == GO_DOWN) _add_m(SHOULDER_DOWN, SHOULDER, -ANGLE_THRESHOLD);
+      if (dir == GO_UP) return _add_m(SHOULDER_UP, SHOULDER, ANGLE_THRESHOLD, SHOULDER_LOW_BOUND, SHOULDER_UP_BOUND);
+      else if (dir == GO_DOWN) return _add_m(SHOULDER_DOWN, SHOULDER, -ANGLE_THRESHOLD, SHOULDER_LOW_BOUND, SHOULDER_UP_BOUND);
       break;
     case ELBOW_MOTOR:
-      if (dir == GO_UP) _add_m(ELBOW_UP, ELBOW, ANGLE_THRESHOLD);
-      else if (dir == GO_DOWN) _add_m(ELBOW_DOWN, ELBOW, -ANGLE_THRESHOLD);
+      if (dir == GO_UP) return _add_m(ELBOW_UP, ELBOW, ANGLE_THRESHOLD, ELBOW_LOW_BOUND, ELBOW_UP_BOUND);
+      else if (dir == GO_DOWN) return _add_m(ELBOW_DOWN, ELBOW, -ANGLE_THRESHOLD, ELBOW_LOW_BOUND, ELBOW_UP_BOUND);
       break;
-    case WRIST_MOTOR:
-      if (dir == GO_UP) _add_m(WRIST_UP, WRIST, ANGLE_THRESHOLD);
-      else if (dir == GO_DOWN) _add_m(WRIST_DOWN, WRIST, -ANGLE_THRESHOLD);
+/*    case WRIST_MOTOR:
+      if (dir == GO_UP) return _add_m(WRIST_UP, WRIST, ANGLE_THRESHOLD);
+      else if (dir == GO_DOWN) return _add_m(WRIST_DOWN, WRIST, -ANGLE_THRESHOLD);
       break;
     case HAND_MOTOR:
-      if (dir == GO_OPEN) _motors.add(HAND_OPEN);
-      else if (dir == GO_CLOSE) _motors.add(HAND_CLOSE);
-      break;
+      if (dir == GO_OPEN) return _motors.add(HAND_OPEN);
+      else if (dir == GO_CLOSE) return _motors.add(HAND_CLOSE);
+      break; */
   }
+  return false;
 }
 
 /*
  * Add motor to _motor list and increment _motor_movement.
  */
-void _add_m(char input, String motor, float angle) {
-  _motors.add(input);
+boolean _add_m(char input, String motor, float angle, float low, float high) {
   float tmp = _motor_movement.get(motor);
-  tmp += angle;
-  _motor_movement.put(motor, tmp);  
+  if ((tmp+angle >= low) && (tmp+angle <= high)) {
+    tmp += angle;
+    _motor_movement.put(motor, tmp);
+    _motors.add(input);
+    return true;
+  }
+  return false;
 }
 
 /*
@@ -329,7 +344,8 @@ class Coord {
     if (new_z > 0) { new_z *= -1; }
     PVector tmp = new PVector(0, this.vec.y, new_z);
     tmp.normalize();
-    float theta = abs((tmp.z*this.vec.x - this.vec.z*tmp.x))/ ((sq(this.vec.z) + sq(this.vec.x)));
+//    float theta = abs((tmp.z*this.vec.x - this.vec.z*tmp.x))/ ((sq(this.vec.z) + sq(this.vec.x)));
+    float theta = abs(tmp.z*this.vec.x) / (sq(this.vec.z) + sq(this.vec.x));
     if (theta > 1) { theta -= theta%1; }// sometimes goes beyond 1 due to precision rounding
     float angle_xz = degrees(asin(theta));
     this.angle_xz = (this.vec.x > 0) ? 90+angle_xz : 90-angle_xz;
@@ -441,7 +457,7 @@ class Coord {
    * @return true if left, false otherwise.
    */   
   boolean isLeft(Coord pos) {
-    return (this.vec.x < pos.vec.x) ? true : false;
+    return (this.angle_xz < pos.angle_xz) ? true : false;
   }
 }
 
