@@ -17,10 +17,14 @@
   boolean _run = false;
   boolean _reset = false;
   boolean _arduino = false;
+  int _hand_state = 0;
+  boolean _hand_sensor = false;
   ArrayList<Character> _motors = new ArrayList<Character>();
   HashMap<String, Float> _motor_movement = new HashMap<String, Float>();
   HashMap<String, Coord> _old_coords = new HashMap<String, Coord>();
   HashMap<String, Coord> _new_coords = new HashMap<String, Coord>();
+  // Accelerometer lookup
+  HashMap<Integer, Float> _acc_lookup = new HashMap<Integer, Float>();
 
   // Motors
   final int BASE_MOTOR = 1;
@@ -41,6 +45,7 @@
   final char HAND_OPEN = 'Z';
   final char HAND_CLOSE = 'X';
   final char STOP_ALL = 'O';
+  final char ACC_READ = 'J';
   
   // directional commands
   final int GO_LEFT = 1;
@@ -59,33 +64,54 @@
   
   final float BASE_LOW_BOUND = -90.0;
   final float BASE_UP_BOUND = 90.0;
-  final float SHOULDER_LOW_BOUND = 0.0;
-  final float SHOULDER_UP_BOUND = 90.0;
-  final float ELBOW_LOW_BOUND = 0.0;
+  //final float SHOULDER_LOW_BOUND = 0.0;
+  //final float SHOULDER_UP_BOUND = 90.0;
+  final float ELBOW_LOW_BOUND = 10.0;
   final float ELBOW_UP_BOUND = 135.0;
+  final float HAND_OPEN_BOUND = 90.0;
+  final float HAND_CLOSE_BOUND = 0.0;
 
   // Motor-degree Conversion Rates
-  final float CONV_RATE = 60.0;
-  final float UP_CONV_RATE = 60.0;
-  final float DOWN_CONV_RATE = 50.0;
+  final float CONV_RATE = 55.0;
+  //final float UP_CONV_RATE = 60.0;
+  //final float DOWN_CONV_RATE = 50.0;
+  final float HAND_CONV_RATE = 15.0;
   
   // Angle treshold
   final float ANGLE_THRESHOLD = 5.0;
+  final float HAND_THRESHOLD = 5.0;
 
 /*
  * Setup function.
  */
 void setup () {
+  // setup serial port
   if (Serial.list().length != 0) {
     _arduino = true;
     _port = new Serial(this, Serial.list()[0], 9600);
   }
+  
+  // setup acc lookup
+  try {
+    BufferedReader file = new BufferedReader(new FileReader("acc_lookup.txt"));
+    while (file.ready()) {
+      String tmp = file.readLine();
+      String[] tokens = tmp.split(" ");
+      _acc_lookup.put(Integer.parseInt(tokens[0]), Float.parseFloat(tokens[1]));
+    }
+    file.close();
+  } catch (Exception e) {
+    println(e);
+  }
+  
+  // setup UDP
   _udp = new UDP(this, 6000);
   _udp.listen(true);
   _motor_movement.put(BASE, 0.0);
-  _motor_movement.put(SHOULDER, 0.0);
-  _motor_movement.put(ELBOW, 0.0);
-  _motor_movement.put(WRIST, 0.0);
+  //_motor_movement.put(SHOULDER, 0.0);
+  _motor_movement.put(ELBOW, 90.0);
+  //_motor_movement.put(WRIST, 0.0);
+  _motor_movement.put(HAND, 0.0);
 }
 
 /*
@@ -106,10 +132,10 @@ void draw () {
     float angle = new_elbow.angleBetween(old_elbow);
     int dir = (new_elbow.isAbove(old_elbow)) ? GO_UP : GO_DOWN;
     if(angle > ANGLE_THRESHOLD) {
-      if (_addMotor(SHOULDER_MOTOR, dir)) {
+      //if (_addMotor(SHOULDER_MOTOR, dir)) {
         old_elbow.rotateVector(ANGLE_THRESHOLD, dir);
         old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
-      }
+      //}
     }
     transform.rotateVector(angle, dir);
 
@@ -131,26 +157,32 @@ void draw () {
         old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
       }
     }
-
-    // check HAND position
+    
+    // move hand
+    _addMotor(HAND_MOTOR, _hand_state);
     
     // move motors
-    _write_to_arduino(ANGLE_THRESHOLD, CONV_RATE);
+    if (_motors.size() > 0) {
+      _write_to_arduino(ANGLE_THRESHOLD, CONV_RATE);
+    } else {
+      _stabilize();
+    }
   }
   
   // do cleanup
   if (_reset) {
     _reset = false;
-    _reset_motor(BASE, BASE_RIGHT, BASE_LEFT);  
-    _reset_motor(SHOULDER, SHOULDER_UP, SHOULDER_DOWN);
-    _reset_motor(ELBOW, ELBOW_UP, ELBOW_DOWN);
-    _reset_motor(WRIST, WRIST_UP, WRIST_DOWN);
+    _reset_motor(BASE, BASE_RIGHT, BASE_LEFT, CONV_RATE);  
+    //_reset_motor(SHOULDER, SHOULDER_UP, SHOULDER_DOWN, CONV_RATE);
+    //_reset_motor(ELBOW, ELBOW_UP, ELBOW_DOWN, CONV_RATE);
+    _reset_elbow(ELBOW, ELBOW_UP, ELBOW_DOWN, CONV_RATE);
+    //_reset_motor(WRIST, WRIST_UP, WRIST_DOWN, CONV_RATE);
+    _reset_motor(HAND, HAND_OPEN, HAND_CLOSE, HAND_CONV_RATE);
     _old_coords.clear();
     _new_coords.clear();
     println ("--- DONE RESET! ");
   }
 }
-
 
 /*
  * Helper function to check whether hashmaps are empty.
@@ -162,14 +194,83 @@ boolean _valid () {
 }
 
 /*
+ * Stabilize the arm when there's no user movement.
+ * Resynchronize the arm based on accelerometer feedback.
+ */
+void _stabilize() {
+  _port.write(ACC_READ);
+  delay(200);
+  while (_port.available() <= 0) {;}
+  if (_port.available() > 0) {
+    byte[] inBuf = new byte[3];
+    _port.readBytes(inBuf);
+    if (inBuf != null) {
+      String tmp = new String(inBuf);
+      int z = Integer.parseInt(tmp.trim());
+      Float cur = _motor_movement.get(ELBOW);
+      Float acc = _acc_lookup.get(z);
+      if (acc != null) {
+        Float diff = acc-cur;
+        if (abs(diff) > ANGLE_THRESHOLD) {
+          if (diff > 0) {
+            _motors.add(ELBOW_DOWN);
+          } else if (diff < 0) {
+            _motors.add(ELBOW_UP);
+          }
+          _write_to_arduino(3.0, CONV_RATE);
+        }
+      }
+    }
+  }
+}
+
+/*
+ * Reset motor based on accelerometer reading.
+ */
+void _reset_elbow(String motor, char pos, char neg, float rate) {
+  int z = 280;
+  while (z < 324 || z > 326) {
+    _port.write(ACC_READ);
+    delay(200);
+    while (_port.available() <= 0) {;}
+    if (_port.available() > 0) {
+      byte[] inBuf = new byte[3];
+      _port.readBytes(inBuf);
+      if (inBuf != null) {
+        try {
+          String tmp = new String(inBuf);
+          z = Integer.parseInt(tmp.trim());
+          if (z >= 324 && z <= 326) {
+            break;
+          }
+          Float angle = _acc_lookup.get(z);
+          Float diff = abs(angle-90.0);
+          if (z < 323) {
+            // reset down
+            _motors.add(neg);
+          } else if (z > 327) {
+            // reset up
+            _motors.add(pos);
+          }
+          _write_to_arduino(diff, rate);
+        } catch (Exception e) {
+          // continue
+        }
+      }
+    }
+  }
+  _motor_movement.put(motor, 90.0);
+}
+
+/*
  * Reset motor based on movement up until now.
  */
-void _reset_motor(String motor, char pos, char neg) {
+void _reset_motor(String motor, char pos, char neg, float rate) {
   float angle = _motor_movement.get(motor);
   if (abs(angle) > 0) {
     if (angle > 0) _motors.add(neg);
     else _motors.add(pos);
-    _write_to_arduino(abs(angle), CONV_RATE);
+    _write_to_arduino(abs(angle), rate);
     _motor_movement.put(motor, 0.0);
   }
 }
@@ -180,25 +281,31 @@ void _reset_motor(String motor, char pos, char neg) {
 boolean _addMotor(int motor, int dir) {
   switch (motor) {
     case BASE_MOTOR:
-      if (dir == GO_LEFT) return _add_m(BASE_LEFT, BASE, -ANGLE_THRESHOLD, BASE_LOW_BOUND, BASE_UP_BOUND);
+      if (dir == GO_LEFT) return _add_m(BASE_LEFT, BASE, ANGLE_THRESHOLD, BASE_LOW_BOUND, BASE_UP_BOUND);
       else if (dir == GO_RIGHT) return _add_m(BASE_RIGHT, BASE, ANGLE_THRESHOLD, BASE_LOW_BOUND, BASE_UP_BOUND);
       break;
-    case SHOULDER_MOTOR:
-      if (dir == GO_UP) return _add_m(SHOULDER_UP, SHOULDER, ANGLE_THRESHOLD, SHOULDER_LOW_BOUND, SHOULDER_UP_BOUND);
-      else if (dir == GO_DOWN) return _add_m(SHOULDER_DOWN, SHOULDER, -ANGLE_THRESHOLD, SHOULDER_LOW_BOUND, SHOULDER_UP_BOUND);
-      break;
+    //case SHOULDER_MOTOR:
+      //if (dir == GO_UP) return _add_m(SHOULDER_UP, SHOULDER, ANGLE_THRESHOLD, SHOULDER_LOW_BOUND, SHOULDER_UP_BOUND);
+      //else if (dir == GO_DOWN) return _add_m(SHOULDER_DOWN, SHOULDER, ANGLE_THRESHOLD, SHOULDER_LOW_BOUND, SHOULDER_UP_BOUND);
+      //break;
     case ELBOW_MOTOR:
       if (dir == GO_UP) return _add_m(ELBOW_UP, ELBOW, ANGLE_THRESHOLD, ELBOW_LOW_BOUND, ELBOW_UP_BOUND);
-      else if (dir == GO_DOWN) return _add_m(ELBOW_DOWN, ELBOW, -ANGLE_THRESHOLD, ELBOW_LOW_BOUND, ELBOW_UP_BOUND);
+      else if (dir == GO_DOWN) return _add_m(ELBOW_DOWN, ELBOW, ANGLE_THRESHOLD, ELBOW_LOW_BOUND, ELBOW_UP_BOUND);
       break;
-/*    case WRIST_MOTOR:
-      if (dir == GO_UP) return _add_m(WRIST_UP, WRIST, ANGLE_THRESHOLD);
-      else if (dir == GO_DOWN) return _add_m(WRIST_DOWN, WRIST, -ANGLE_THRESHOLD);
-      break;
+    //case WRIST_MOTOR:
+      //if (dir == GO_UP) return _add_m(WRIST_UP, WRIST, ANGLE_THRESHOLD);
+      //else if (dir == GO_DOWN) return _add_m(WRIST_DOWN, WRIST, ANGLE_THRESHOLD);
+      //break;
     case HAND_MOTOR:
-      if (dir == GO_OPEN) return _motors.add(HAND_OPEN);
-      else if (dir == GO_CLOSE) return _motors.add(HAND_CLOSE);
-      break; */
+      float current_angle = _motor_movement.get(HAND);
+      if (dir == GO_OPEN) {
+        float min_angle = min(HAND_OPEN_BOUND - current_angle, HAND_THRESHOLD);
+        return _add_m(HAND_OPEN, HAND, min_angle, HAND_CLOSE_BOUND, HAND_OPEN_BOUND);
+      } else if (dir == GO_CLOSE && !_hand_sensor) {
+        float min_angle = min(current_angle, HAND_THRESHOLD);
+        return _add_m(HAND_CLOSE, HAND, min_angle, HAND_CLOSE_BOUND, HAND_OPEN_BOUND);
+      }
+      break;
   }
   return false;
 }
@@ -207,12 +314,15 @@ boolean _addMotor(int motor, int dir) {
  * Add motor to _motor list and increment _motor_movement.
  */
 boolean _add_m(char input, String motor, float angle, float low, float high) {
-  float tmp = _motor_movement.get(motor);
-  if ((tmp+angle >= low) && (tmp+angle <= high)) {
-    tmp += angle;
-    _motor_movement.put(motor, tmp);
-    _motors.add(input);
-    return true;
+  if (angle > 0) {
+    if (input==BASE_LEFT || input==SHOULDER_DOWN || input == ELBOW_DOWN || input == HAND_CLOSE) { angle = -angle; }
+    float tmp = _motor_movement.get(motor);
+    if ((tmp+angle >= low) && (tmp+angle <= high)) {
+      tmp += angle;
+      _motor_movement.put(motor, tmp);
+      _motors.add(input);
+      return true;
+    }
   }
   return false;
 }
@@ -222,11 +332,33 @@ boolean _add_m(char input, String motor, float angle, float low, float high) {
  */
 void _write_to_arduino(float angle, float rate) {
   if (_arduino && !_motors.isEmpty()) {
-    int i, counter = floor(angle*rate);
+    int i, hand_counter = -1, counter = floor(angle*rate);
+    if (_motors.indexOf(HAND_OPEN) >= 0 || _motors.indexOf(HAND_CLOSE) >= 0) {
+      hand_counter = floor(HAND_CONV_RATE * angle);
+    }
     for (i=0; i<_motors.size()-1; i++) {
       _port.write(_motors.get(i));
     }
     while (counter-- > 0) {
+      if (hand_counter >= 0) {
+        hand_counter--;
+      }
+      if (hand_counter == 0) {
+        if (_motors.indexOf(HAND_OPEN) >= 0) {
+          _motors.remove(_motors.indexOf(HAND_OPEN));
+        }
+        if (_motors.indexOf(HAND_CLOSE) >= 0) {
+          _motors.remove(_motors.indexOf(HAND_CLOSE));
+        }
+        if (_motors.isEmpty()) {
+          break;
+        } else {
+          _port.write(STOP_ALL);
+          for (i=0; i<_motors.size()-1; i++) {
+            _port.write(_motors.get(i));
+          }
+        }
+      }
       _port.write(_motors.get(i));
     }
     _port.write(STOP_ALL);
@@ -240,12 +372,17 @@ void _write_to_arduino(float angle, float rate) {
 void receive(byte[] data, String ip, int port ) {
   String message = new String(data);
   // println( "receive: \""+message+"\" from "+ip+" on port "+port );
+  String hand_txt = (_hand_state == GO_OPEN) ? new String("open") : new String("close");
+  
   _deserialize(message);
   println("--- AFTER DESERiALIZE: ");
   println(" old_coords: ");
   hm_toString(_old_coords);
+  println("   HAND is: "+hand_txt);
+  hand_txt = (_hand_state == GO_OPEN) ? new String("open") : new String("close");
   println(" new_coords: ");
   hm_toString(_new_coords);
+  println("   HAND is: "+hand_txt);
 }
 
 /*
@@ -290,22 +427,26 @@ void _parse_coords (HashMap<String, Coord> _hm, String[] tokens) {
   for (int i=0; i<tokens.length; i++) {
     String[] metadata = split(tokens[i], ':');
     String key = metadata[0];
-    float[] values = float(split(metadata[1], ','));
-    
-    // z values are always negative
-    if (values[2] > 0) values[2] = 0;
-    // create coord
-    Coord tmp = new Coord(values[0], values[1], values[2]);
-    // if Elbow, set rotate vector such that x==0 to track yz movement
-    if (key.equals(ELBOW)) {
-      float theta = abs(90 - tmp.angle_xz);
-      if (theta != 0) {
-        int dir = (tmp.angle_xz < 90) ? GO_RIGHT : GO_LEFT;
-        tmp.rotateVector(theta, dir);
+    if (key.equals(HAND)) {
+      _hand_state = (int(metadata[1])==0) ? GO_OPEN : GO_CLOSE;
+    } else {
+      float[] values = float(split(metadata[1], ','));
+      
+      // z values are always negative
+      if (values[2] > 0) values[2] = 0;
+      // create coord
+      Coord tmp = new Coord(values[0], values[1], values[2]);
+      // if Elbow, set rotate vector such that x==0 to track yz movement
+      if (key.equals(ELBOW)) {
+        float theta = abs(90 - tmp.angle_xz);
+        if (theta != 0) {
+          int dir = (tmp.angle_xz < 90) ? GO_RIGHT : GO_LEFT;
+          tmp.rotateVector(theta, dir);
+        }
       }
+      // put into hashmap
+      _hm.put(key, tmp);
     }
-    // put into hashmap
-    _hm.put(key, tmp);
   }
 }
 
@@ -344,9 +485,9 @@ class Coord {
     if (new_z > 0) { new_z *= -1; }
     PVector tmp = new PVector(0, this.vec.y, new_z);
     tmp.normalize();
-//    float theta = abs((tmp.z*this.vec.x - this.vec.z*tmp.x))/ ((sq(this.vec.z) + sq(this.vec.x)));
     float theta = abs(tmp.z*this.vec.x) / (sq(this.vec.z) + sq(this.vec.x));
-    if (theta > 1) { theta -= theta%1; }// sometimes goes beyond 1 due to precision rounding
+    // sometimes goes beyond 1 due to precision rounding
+    if (theta > 1) { theta -= theta%1; }
     float angle_xz = degrees(asin(theta));
     this.angle_xz = (this.vec.x > 0) ? 90+angle_xz : 90-angle_xz;
   }
