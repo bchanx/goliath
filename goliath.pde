@@ -18,7 +18,6 @@
   boolean _reset = false;
   boolean _arduino = false;
   int _hand_state = 0;
-  boolean _hand_sensor = false;
   ArrayList<Character> _motors = new ArrayList<Character>();
   HashMap<String, Float> _motor_movement = new HashMap<String, Float>();
   HashMap<String, Coord> _old_coords = new HashMap<String, Coord>();
@@ -34,8 +33,8 @@
   final int HAND_MOTOR = 5;
   
   // Directional input keys
-  final char BASE_LEFT = 'W';
-  final char BASE_RIGHT = 'Q';
+  final char BASE_LEFT = 'Q';
+  final char BASE_RIGHT = 'W';
   final char SHOULDER_UP = 'E';
   final char SHOULDER_DOWN = 'R';
   final char ELBOW_UP = 'A';
@@ -72,19 +71,60 @@
   final float HAND_CLOSE_BOUND = 0.0;
 
   // Motor-degree Conversion Rates
-  final float CONV_RATE = 55.0;
-  //final float UP_CONV_RATE = 60.0;
-  //final float DOWN_CONV_RATE = 50.0;
+  final float CONV_RATE = 53.0;
   final float HAND_CONV_RATE = 15.0;
   
   // Angle treshold
   final float ANGLE_THRESHOLD = 5.0;
   final float HAND_THRESHOLD = 5.0;
 
+  // values to store X, Y for each button
+  int M1LX=5, M1RX=75, M2LX=5, M2RX=75, M3LX=5, M3RX=75, M4LX=5, M4RX=75, M5LX=5, M5RX=75;
+  int M1LY=25, M1RY=25, M2LY=115, M2RY=115, M3LY=205, M3RY=205, M4LY=295, M4RY=295, M5LY=385, M5RY=385;
+  // stores the width/height of the box
+  int boxSize = 64;
+  // 2 new instances of my arrow class
+  // also set an array of coordinates for each arrow
+  arrow myRightArrow;
+  int[]rightArrowxpoints={30,54,30,30,0,0,30}; 
+  int[]rightArrowypoints={0,27,54,40,40,15,15};
+  arrow myLeftArrow;
+  int[]leftArrowxpoints={0,24,24,54,54,24,24}; 
+  int[]leftArrowypoints={27,0,15,15,40,40,54};
+  // set the font
+  PFont myFont;
+  
 /*
  * Setup function.
  */
 void setup () {
+  // setup manual control
+  size(145, 455);
+  myFont = createFont("verdana", 12);
+  textFont(myFont);
+  myRightArrow = new arrow(rightArrowxpoints, rightArrowypoints, 7);
+  myLeftArrow = new arrow(leftArrowxpoints, leftArrowypoints, 7);
+  background(0);
+  noStroke();
+  fill(150);
+  // draw each box/ button with a label above each    
+  text("Base Motor (Q/W)", 5, 5, 200, 75); 
+  text("Shoulder Motor (E/R)", 5, 95, 200, 75);
+  text("Elbow Motor (A/S)", 5, 185, 200, 75);
+  text("Wrist Motor (D/F)", 5, 275, 200, 75);     
+  text("Hand Motor (Z/X)", 5, 365, 200, 75);
+  // draw the buttons
+  myRightArrow.drawArrow(80,30);
+  myRightArrow.drawArrow(80,120);
+  myRightArrow.drawArrow(80,210);
+  myRightArrow.drawArrow(80,300);
+  myRightArrow.drawArrow(80,390);
+  myLeftArrow.drawArrow(10,30);
+  myLeftArrow.drawArrow(10,120);
+  myLeftArrow.drawArrow(10,210);
+  myLeftArrow.drawArrow(10,300);
+  myLeftArrow.drawArrow(10,390);
+  
   // setup serial port
   if (Serial.list().length != 0) {
     _arduino = true;
@@ -118,69 +158,104 @@ void setup () {
  * Continuous draw function.
  */
 void draw () {
-  if (_run && _valid()) {
-    // Get Current Data vectors
-    Coord new_elbow = _new_coords.get(ELBOW);
-    Coord old_elbow = _old_coords.get(ELBOW);
-    Coord new_wrist = _new_coords.get(WRIST);
-    Coord old_wrist = _old_coords.get(WRIST);
-    
-    // Transform vector to keep track of movement
-    Coord transform = new Coord(old_wrist);
-    
-    // check ELBOW up/down position
-    float angle = new_elbow.angleBetween(old_elbow);
-    int dir = (new_elbow.isAbove(old_elbow)) ? GO_UP : GO_DOWN;
-    if(angle > ANGLE_THRESHOLD) {
-      //if (_addMotor(SHOULDER_MOTOR, dir)) {
-        old_elbow.rotateVector(ANGLE_THRESHOLD, dir);
-        old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
-      //}
-    }
-    transform.rotateVector(angle, dir);
-
-    // check WRIST left/right
-    angle = abs(new_wrist.angle_xz - old_wrist.angle_xz);
-    dir = (new_wrist.isLeft(old_wrist)) ? GO_LEFT : GO_RIGHT;  
-    if (angle > ANGLE_THRESHOLD) {
-      if (_addMotor(BASE_MOTOR, dir)) {
-        old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+  if (_run) {
+    if (_valid()) {
+      // Get Current Data vectors
+      Coord new_elbow = _new_coords.get(ELBOW);
+      Coord old_elbow = _old_coords.get(ELBOW);
+      Coord new_wrist = _new_coords.get(WRIST);
+      Coord old_wrist = _old_coords.get(WRIST);
+      
+      // Transform vector to keep track of movement
+      Coord transform = new Coord(old_wrist);
+      
+      // check ELBOW up/down position
+      float angle = new_elbow.angleBetween(old_elbow);
+      int dir = (new_elbow.isAbove(old_elbow)) ? GO_UP : GO_DOWN;
+      if(angle > ANGLE_THRESHOLD) {
+        //if (_addMotor(SHOULDER_MOTOR, dir)) {
+          old_elbow.rotateVector(ANGLE_THRESHOLD, dir);
+          old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+        //}
+      }
+      transform.rotateVector(angle, dir);
+  
+      // check WRIST left/right
+      angle = abs(new_wrist.angle_xz - old_wrist.angle_xz);
+      dir = (new_wrist.isLeft(old_wrist)) ? GO_LEFT : GO_RIGHT;  
+      if (angle > ANGLE_THRESHOLD) {
+        if (_addMotor(BASE_MOTOR, dir)) {
+          old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+        }
+      }
+      transform.rotateVector(angle, dir);
+  
+      // check WRIST up/down    
+      angle = new_wrist.angleBetween(transform);
+      dir = (new_wrist.isAbove(transform)) ? GO_UP : GO_DOWN;
+      if (angle > ANGLE_THRESHOLD) {
+        if (_addMotor(ELBOW_MOTOR, dir)) {
+          old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+        }
+      }
+      
+      // move hand
+      _addMotor(HAND_MOTOR, _hand_state);
+      
+      // move motors
+      if (_motors.size() > 0) {
+        _write_to_arduino(ANGLE_THRESHOLD, CONV_RATE);
+      } else {
+        _stabilize();
       }
     }
-    transform.rotateVector(angle, dir);
-
-    // check WRIST up/down    
-    angle = new_wrist.angleBetween(transform);
-    dir = (new_wrist.isAbove(transform)) ? GO_UP : GO_DOWN;
-    if (angle > ANGLE_THRESHOLD) {
-      if (_addMotor(ELBOW_MOTOR, dir)) {
-        old_wrist.rotateVector(ANGLE_THRESHOLD, dir);
+  } else {
+    // do cleanup
+    if (_reset) {
+      _reset = false;
+      _reset_motor(BASE, BASE_RIGHT, BASE_LEFT, CONV_RATE);  
+      //_reset_motor(SHOULDER, SHOULDER_UP, SHOULDER_DOWN, CONV_RATE);
+      //_reset_motor(ELBOW, ELBOW_UP, ELBOW_DOWN, CONV_RATE);
+      _reset_elbow(ELBOW, ELBOW_UP, ELBOW_DOWN, CONV_RATE);
+      //_reset_motor(WRIST, WRIST_UP, WRIST_DOWN, CONV_RATE);
+      _reset_motor(HAND, HAND_OPEN, HAND_CLOSE, HAND_CONV_RATE);
+      _old_coords.clear();
+      _new_coords.clear();
+      println ("--- DONE RESET! ");
+    } else if (_arduino) {
+      if (keyPressed) {
+        _handle_keypress();
+      } else {
+        _port.write('O');
       }
-    }
-    
-    // move hand
-    _addMotor(HAND_MOTOR, _hand_state);
-    
-    // move motors
-    if (_motors.size() > 0) {
-      _write_to_arduino(ANGLE_THRESHOLD, CONV_RATE);
-    } else {
-      _stabilize();
     }
   }
-  
-  // do cleanup
-  if (_reset) {
-    _reset = false;
-    _reset_motor(BASE, BASE_RIGHT, BASE_LEFT, CONV_RATE);  
-    //_reset_motor(SHOULDER, SHOULDER_UP, SHOULDER_DOWN, CONV_RATE);
-    //_reset_motor(ELBOW, ELBOW_UP, ELBOW_DOWN, CONV_RATE);
-    _reset_elbow(ELBOW, ELBOW_UP, ELBOW_DOWN, CONV_RATE);
-    //_reset_motor(WRIST, WRIST_UP, WRIST_DOWN, CONV_RATE);
-    _reset_motor(HAND, HAND_OPEN, HAND_CLOSE, HAND_CONV_RATE);
-    _old_coords.clear();
-    _new_coords.clear();
-    println ("--- DONE RESET! ");
+}
+
+/*
+ * Handle manual control of robotic arm when process loop is not running.
+ */
+void _handle_keypress() {
+  if (key == 'q' || key == 'Q') {
+    _port.write('Q');
+  } else if (key == 'w' || key == 'W') {
+    _port.write('W');
+  } else if (key == 'e' || key == 'E') {
+    _port.write('E');
+  } else if (key == 'r' || key == 'R') {
+    _port.write('R');
+  } else if (key == 'a' || key == 'A') {
+    _port.write('A');
+  } else if (key == 's' || key == 'S') {
+    _port.write('S');
+  } else if (key == 'd' || key == 'D') {
+    _port.write('D');
+  } else if (key == 'f' || key == 'F') {
+    _port.write('F');
+  } else if (key == 'z' || key == 'Z') {
+    _port.write('Z');
+  } else if (key == 'x' || key == 'X') {
+    _port.write('X');
   }
 }
 
@@ -301,7 +376,7 @@ boolean _addMotor(int motor, int dir) {
       if (dir == GO_OPEN) {
         float min_angle = min(HAND_OPEN_BOUND - current_angle, HAND_THRESHOLD);
         return _add_m(HAND_OPEN, HAND, min_angle, HAND_CLOSE_BOUND, HAND_OPEN_BOUND);
-      } else if (dir == GO_CLOSE && !_hand_sensor) {
+      } else if (dir == GO_CLOSE) {
         float min_angle = min(current_angle, HAND_THRESHOLD);
         return _add_m(HAND_CLOSE, HAND, min_angle, HAND_CLOSE_BOUND, HAND_OPEN_BOUND);
       }
@@ -627,3 +702,25 @@ class Timer  {
   }
 }
 
+class arrow extends java.awt.Polygon { 
+  /* our class is basically an instance of java.awt.Polygons and this class expects and array of X points, Y points and the number of 
+     points in our shape. The variable names also have to be direct references to what this class expects, so xpoints, ypoints and npoints are all
+     set/defined in the java class.
+  */
+  public arrow(int[] xpoints,int[] ypoints, int npoints) {
+    // super invokes the java.awt.Polygon class
+    super(xpoints,ypoints,npoints);
+ 
+  } 
+    // supply offsets to draw the arrow, means I don't need to set points for each one
+    void drawArrow(int xOffset, int yOffset){
+    fill(150);
+    rect(xOffset-5, yOffset-5, boxSize, boxSize);
+    fill(255);
+    beginShape();
+    for(int i=0;i<npoints;i++){
+      vertex(xpoints[i]+xOffset,ypoints[i]+yOffset);
+    } 
+    endShape();
+    }
+}
